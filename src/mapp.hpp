@@ -7,13 +7,14 @@
 #define MA_NO_PULSEAUDIO
 #include "miniaudio/miniaudio.h"
 
-#include <algorithm>
-#include <condition_variable>
-#include <cstring>
-#include <exception>
-#include <mutex>
-#include <thread>
-#include <vector>
+#include <algorithm> //remove_if
+#include <condition_variable> //condition_variable
+#include <cstring> //memset
+#include <exception> //exception
+#include <functional> //function
+#include <mutex> //mutex
+#include <utility> //move
+#include <vector> //vector
 
 namespace mapp {
 
@@ -56,6 +57,12 @@ public:
         return !silence;
     }
 
+    // callback can not call mapp API, see https://github.com/dr-soft/miniaudio/issues/64
+    void set_finish_callback(std::function<void()> callback)
+    {
+        on_finish_callback = std::move(callback);
+    }
+
 protected:
     audio() //this class is not supposed to be used directly
         : decoder{}
@@ -88,6 +95,8 @@ private:
 
     void finish_playing_callback()
     {
+        if (on_finish_callback)
+            on_finish_callback();
         cv_finished.notify_all();
     }
 
@@ -97,6 +106,7 @@ protected:
 private:
     mutable std::mutex mutex;
     mutable std::condition_variable cv_finished;
+    std::function<void()> on_finish_callback;
     bool silence{ true };
 };
 

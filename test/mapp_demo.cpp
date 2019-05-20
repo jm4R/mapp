@@ -13,6 +13,7 @@ int main(int argc, char* argv[])
         for (int i=1; i<argc; ++i)
         {
              mapp::audio_file af{ argv[i] };
+             af.set_finish_callback([] { std::cout << "finished playing audio" << std::endl; });
              caout << af; //async call
              af.wait();
         }
