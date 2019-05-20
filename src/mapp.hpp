@@ -57,14 +57,20 @@ public:
         return !silence;
     }
 
-    // callback can not call mapp API, see https://github.com/dr-soft/miniaudio/issues/64
+    /// Stops device asynchronously. Call wait to ensure audio is stopped. Finish callback will be called.
+    void stop()
+    {
+        stop_later = true;
+    }
+
+    /// Callback can not call mapp API, see https://github.com/dr-soft/miniaudio/issues/64
     void set_finish_callback(std::function<void()> callback)
     {
         on_finish_callback = std::move(callback);
     }
 
 protected:
-    audio() //this class is not supposed to be used directly
+    audio() /// This class is not supposed to be used directly.
         : decoder{}
     {
     }
@@ -72,6 +78,7 @@ protected:
 private:
     void rewind()
     {
+        stop_later = false;
         ma_decoder_seek_to_pcm_frame(&decoder, 0);
     }
 
@@ -79,7 +86,7 @@ private:
     {
         const auto framesDecoded = ma_decoder_read_pcm_frames(&decoder, output, frame_count);
 
-        bool silenceNow = framesDecoded == 0;
+        bool silenceNow = framesDecoded == 0 || stop_later;
         if (silenceNow && !silence) {
             {
                 std::lock_guard<std::mutex> lock { mutex };
@@ -104,13 +111,14 @@ protected:
     ma_decoder decoder;
 
 private:
-    mutable std::mutex mutex;
-    mutable std::condition_variable cv_finished;
-    std::function<void()> on_finish_callback;
+    mutable std::mutex mutex{};
+    mutable std::condition_variable cv_finished{};
+    std::function<void()> on_finish_callback{};
     bool silence{ true };
+    bool stop_later{ false };
 };
 
-/* Audio played directly from the file */
+/// Audio played directly from the file
 class audio_file final : public audio {
 
 public:
@@ -124,7 +132,7 @@ public:
     }
 };
 
-/* Audio played directly from the memory. Does not take ownership of the memory */
+/// Audio played directly from the memory. Does not take ownership of the memory.
 class audio_memory_view final : public audio {
 public:
     audio_memory_view(const void* data, std::size_t size)
@@ -144,7 +152,7 @@ struct oastream_config {
 };
 
 class oastream final {
-    using float32 = float; // TODO
+    using float32 = float;
     static_assert(sizeof(float32) == 4, "Platform is not supported");
 
 public:
@@ -174,13 +182,20 @@ public:
         play_impl();
     }
 
-    void stop()
+    /// Removes all audios without stopping stream. Call wait before destroing any audio. Audios finish callbacks will not be invoked.
+    void stop_audios()
     {
-        if (!silence)
-            ma_device_stop(&device);
+        stop_later = true;
     }
 
-    // starts when the stream is stopped
+    /// Removes all audios and stops stream. Call wait before destroing any audio.
+    void stop_stream()
+    {
+        stop_audios();
+        ma_device_stop(&device);
+    }
+
+    /// Starts when the stream is stopped.
     void play(audio& audio)
     {
         audio.rewind();
@@ -220,12 +235,10 @@ private:
                 fOutput[i] += audio_output[i];
         }
 
-        //remove all finished audios:
-        auto toRemove = std::remove_if(audios.begin(), audios.end(), [](const audio* a) { return !a->is_playing(); });
+        // Remove all finished audios:
+        auto toRemove = stop_later ? audios.begin()
+                                    : std::remove_if(audios.begin(), audios.end(), [](const audio* a) { return !a->is_playing(); });
         audios.erase(toRemove, audios.end());
-        //if (audios.empty()) {
-        //    ma_device_stop(&device); //TODO: https://github.com/dr-soft/miniaudio/issues/64
-        //}
         if (audios.empty() && !silence) {
             {
                 std::lock_guard<std::mutex> lock{ mutex };
@@ -238,6 +251,7 @@ private:
 
     void finish_playing_callback()
     {
+        stop_later = false;
         cv_finished.notify_all();
     }
 
@@ -270,6 +284,7 @@ private:
     mutable std::condition_variable cv_finished;
     std::vector<audio*> audios;
     std::vector<float32> frames_buffer;
+    bool stop_later{ false };
     bool silence{ true };
 };
 
