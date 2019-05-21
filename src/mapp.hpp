@@ -182,7 +182,8 @@ public:
         play_impl();
     }
 
-    /// Removes all audios without stopping stream. Call wait before destroing any audio. Audios finish callbacks will not be invoked.
+    /// Removes all audios without stopping stream. Call wait before destroing any audio.
+    /// Audios finish callbacks will not be invoked.
     void stop_audios()
     {
         stop_later = true;
@@ -212,6 +213,12 @@ public:
         }
     }
 
+    /// Sets a volume in (0.0 - 1.0) range. Setting volume higher than 1.0 may cause crackles.
+    void set_volume(float value)
+    {
+        volume = value;
+    }
+
 private:
     static void data_callback(ma_device* pDevice, void* pOutput, const void* pInput, ma_uint32 frameCount)
     {
@@ -232,7 +239,7 @@ private:
         for (auto* audio : audios) {
             const auto framesDecoded = audio->data(audio_output, frameCount);
             for (unsigned i = 0; i < framesDecoded * dev_config.playback.channels; ++i)
-                fOutput[i] += audio_output[i];
+                fOutput[i] += volume * audio_output[i];
         }
 
         // Remove all finished audios:
@@ -284,6 +291,7 @@ private:
     mutable std::condition_variable cv_finished;
     std::vector<audio*> audios;
     std::vector<float32> frames_buffer;
+    float volume { 1.0f };
     bool stop_later{ false };
     bool silence{ true };
 };
