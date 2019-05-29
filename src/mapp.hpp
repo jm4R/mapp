@@ -21,23 +21,100 @@ namespace mapp {
 class mapp_exception final : std::exception {
 public:
     enum reason {
-        general
+        error = -1,
+        invalid_args = -2,
+        invalid_operation = -3,
+        out_of_memory = -4,
+        access_denied = -5,
+        too_large = -6,
+        timeout = -7,
+
+        format_not_supported = -100,
+        device_type_not_supported = -101,
+        share_mode_not_supported = -102,
+        no_backend = -103,
+        no_device = -104,
+        api_not_found = -105,
+        invalid_device_config = -106,
+
+        device_busy = -200,
+        device_not_initialized = -201,
+        device_not_started = -202,
+        device_unavailable = -203,
+
+        failed_to_map_device_buffer = -300,
+        failed_to_unmap_device_buffer = -301,
+        failed_to_init_backend = -302,
+        failed_to_read_data_from_client = -303,
+        failed_to_read_data_from_device = -304,
+        failed_to_send_data_to_client = -305,
+        failed_to_send_data_to_device = -306,
+        failed_to_open_backend_device = -307,
+        failed_to_start_backend_device = -308,
+        failed_to_stop_backend_device = -309,
+        failed_to_configure_backend_device = -310,
+        failed_to_create_mutex = -311,
+        failed_to_create_thread = -313,
+        failed_to_create_event = -312
     } the_reason;
 
-    mapp_exception(reason r = general)
-        : the_reason(r)
+    mapp_exception(reason r = error)
+        : the_reason{ r }
     {
     }
+
+    mapp_exception(ma_result ma_error_code)
+        : the_reason{ static_cast<reason>(ma_error_code) }
+    {
+    }
+
+#define stringify(x) \
+    case (x):        \
+        return #x
 
     const char*
     what() const noexcept override
     {
         switch (the_reason) {
-        case general:
-            return "General MAPP problem";
+            stringify(error);
+            stringify(invalid_args);
+            stringify(invalid_operation);
+            stringify(out_of_memory);
+            stringify(access_denied);
+            stringify(too_large);
+            stringify(timeout);
+
+            stringify(format_not_supported);
+            stringify(device_type_not_supported);
+            stringify(share_mode_not_supported);
+            stringify(no_backend);
+            stringify(no_device);
+            stringify(api_not_found);
+            stringify(invalid_device_config);
+
+            stringify(device_busy);
+            stringify(device_not_initialized);
+            stringify(device_not_started);
+            stringify(device_unavailable);
+
+            stringify(failed_to_map_device_buffer);
+            stringify(failed_to_unmap_device_buffer);
+            stringify(failed_to_init_backend);
+            stringify(failed_to_read_data_from_client);
+            stringify(failed_to_read_data_from_device);
+            stringify(failed_to_send_data_to_client);
+            stringify(failed_to_send_data_to_device);
+            stringify(failed_to_open_backend_device);
+            stringify(failed_to_start_backend_device);
+            stringify(failed_to_stop_backend_device);
+            stringify(failed_to_configure_backend_device);
+            stringify(failed_to_create_mutex);
+            stringify(failed_to_create_event);
+            stringify(failed_to_create_thread);
         }
-        return "";
+        return "Unrecognised mapp problem";
     }
+#undef stringify
 };
 
 class audio {
@@ -89,7 +166,7 @@ private:
         bool silenceNow = framesDecoded == 0 || m_stop_later;
         if (silenceNow && !m_silence) {
             {
-                std::lock_guard<std::mutex> lock { m_mutex };
+                std::lock_guard<std::mutex> lock{ m_mutex };
                 m_silence = true;
             }
             finish_playing_callback();
@@ -125,9 +202,9 @@ public:
     audio_file(const char* file_name)
     {
         ma_decoder_config cfg = ma_decoder_config_init(ma_format_f32, 2, 44100); //TODO read from device
-        ma_result result = ma_decoder_init_file(file_name, &cfg, &m_decoder);
+        const auto result = ma_decoder_init_file(file_name, &cfg, &m_decoder);
         if (result != MA_SUCCESS) {
-            throw mapp_exception{};
+            throw mapp_exception{ result };
         }
     }
 };
@@ -138,9 +215,9 @@ public:
     audio_memory_view(const void* data, std::size_t size)
     {
         ma_decoder_config cfg = ma_decoder_config_init(ma_format_f32, 2, 44100); //TODO read from device
-        ma_result result = ma_decoder_init_memory(data, size, &cfg, &m_decoder);
+        const auto result = ma_decoder_init_memory(data, size, &cfg, &m_decoder);
         if (result != MA_SUCCESS) {
-            throw mapp_exception{};
+            throw mapp_exception{ result };
         }
     }
 };
@@ -160,8 +237,9 @@ public:
         : m_device{}
         , m_dev_config(make_ma_config(config))
     {
-        if (ma_device_init(nullptr, &m_dev_config, &m_device) != MA_SUCCESS) {
-            throw mapp_exception{};
+        const auto result = ma_device_init(nullptr, &m_dev_config, &m_device);
+        if (result != MA_SUCCESS) {
+            throw mapp_exception{ result };
         }
     }
 
@@ -244,7 +322,7 @@ private:
 
         // Remove all finished audios:
         auto toRemove = m_stop_later ? m_audios.begin()
-                                    : std::remove_if(m_audios.begin(), m_audios.end(), [](const audio* a) { return !a->is_playing(); });
+                                     : std::remove_if(m_audios.begin(), m_audios.end(), [](const audio* a) { return !a->is_playing(); });
         m_audios.erase(toRemove, m_audios.end());
         if (m_audios.empty() && !m_silence) {
             {
@@ -279,8 +357,9 @@ private:
         m_silence = false;
         if (ma_device__get_state(&m_device) != MA_STATE_STOPPED) //TODO: race condition
             return;
-        if (ma_device_start(&m_device) != MA_SUCCESS) {
-            throw mapp_exception{};
+        const auto result = ma_device_start(&m_device);
+        if (result != MA_SUCCESS) {
+            throw mapp_exception{ result };
         }
     }
 
@@ -291,7 +370,7 @@ private:
     mutable std::condition_variable m_cv_finished;
     std::vector<audio*> m_audios;
     std::vector<float32> m_frames_buffer;
-    float m_volume { 1.0f };
+    float m_volume{ 1.0f };
     bool m_stop_later{ false };
     bool m_silence{ true };
 };
