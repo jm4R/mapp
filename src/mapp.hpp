@@ -7,6 +7,7 @@
 #define MA_NO_PULSEAUDIO
 #include "miniaudio/miniaudio.h"
 
+#include <atomic> //atomic
 #include <algorithm> //remove_if
 #include <condition_variable> //condition_variable
 #include <cstring> //memset
@@ -125,7 +126,7 @@ public:
     {
         if (!m_silence) {
             std::unique_lock<std::mutex> lock{ m_mutex };
-            m_cv_finished.wait(lock, [this] { return m_silence; });
+            m_cv_finished.wait(lock, [this]() -> bool { return m_silence; });
         }
     }
 
@@ -191,8 +192,8 @@ private:
     mutable std::mutex m_mutex{};
     mutable std::condition_variable m_cv_finished{};
     std::function<void()> m_on_finish_callback{};
-    bool m_silence{ true };
-    bool m_stop_later{ false };
+    std::atomic<bool> m_silence{ true };
+    std::atomic<bool> m_stop_later{ false };
 };
 
 /// Audio played directly from the file
@@ -228,6 +229,13 @@ struct oastream_config {
     unsigned short channels{ 2 };
 };
 
+//what to do when atempt to play audio that is currently played
+enum class replay_strategy
+{
+    rewind,
+    skip
+};
+
 class oastream final {
     using float32 = float;
     static_assert(sizeof(float32) == 4, "Platform is not supported");
@@ -245,6 +253,7 @@ public:
 
     ~oastream()
     {
+        stop_stream();
         ma_device_uninit(&m_device);
     }
 
@@ -260,11 +269,11 @@ public:
         play_impl();
     }
 
-    /// Removes all audios without stopping stream. Call wait before destroing any audio.
-    /// Audios finish callbacks will not be invoked.
+    /// Removes all audios without stopping stream. Audios finish callbacks will not be invoked.
     void stop_audios()
     {
-        m_stop_later = true;
+        std::lock_guard l{m_audios_mutex};
+        m_audios.clear();
     }
 
     /// Removes all audios and stops stream. Call wait before destroing any audio.
@@ -275,11 +284,25 @@ public:
     }
 
     /// Starts when the stream is stopped.
-    void play(audio& audio)
+    void play(audio& audio, replay_strategy strategy = replay_strategy::rewind)
     {
+        if (!audio.m_silence)
+        {
+            switch (strategy)
+            {
+            case replay_strategy::rewind:
+                audio.stop();
+                audio.wait();
+                break;
+            case replay_strategy::skip:
+                return;
+            }
+        }
         audio.rewind();
-        audio.m_silence = false;
-        m_audios.push_back(&audio);
+        {
+            std::lock_guard l{m_audios_mutex};
+            m_audios.push_back(&audio);
+        }
         play_impl();
     }
 
@@ -287,7 +310,7 @@ public:
     {
         if (!m_silence) {
             std::unique_lock<std::mutex> lock{ m_mutex };
-            m_cv_finished.wait(lock, [this] { return m_silence; });
+            m_cv_finished.wait(lock, [this]() -> bool { return m_silence; });
         }
     }
 
@@ -314,29 +337,34 @@ private:
         auto fOutput = static_cast<float32*>(pOutput);
         std::memset(fOutput, 0, buffer_size_frames * sizeof(float32));
 
-        for (auto* audio : m_audios) {
-            const auto framesDecoded = audio->data(audio_output, frameCount);
-            for (unsigned i = 0; i < framesDecoded * m_dev_config.playback.channels; ++i)
-                fOutput[i] += m_volume * audio_output[i];
-        }
+        // under lock:
+        bool silence = [&] {
+            std::lock_guard l{m_audios_mutex};
+            for (auto* audio : m_audios)
+            {
+                const auto framesDecoded =
+                    audio->data(audio_output, frameCount);
+                for (unsigned i = 0;
+                     i < framesDecoded * m_dev_config.playback.channels; ++i)
+                    fOutput[i] += m_volume * audio_output[i];
+            }
 
-        // Remove all finished audios:
-        auto toRemove = m_stop_later ? m_audios.begin()
-                                     : std::remove_if(m_audios.begin(), m_audios.end(), [](const audio* a) { return !a->is_playing(); });
-        m_audios.erase(toRemove, m_audios.end());
-        if (m_audios.empty() && !m_silence) {
+            auto toRemove = std::remove_if(m_audios.begin(), m_audios.end(), [](const audio* a) { return !a->is_playing(); });
+            m_audios.erase(toRemove, m_audios.end());
+            return m_audios.empty();
+        }();
+        if (silence && !m_silence) {
             {
                 std::lock_guard<std::mutex> lock{ m_mutex };
                 m_silence = true;
             }
             finish_playing_callback();
         }
-        m_silence = m_audios.empty();
+        m_silence = silence;
     }
 
     void finish_playing_callback()
     {
-        m_stop_later = false;
         m_cv_finished.notify_all();
     }
 
@@ -369,10 +397,10 @@ private:
     mutable std::mutex m_mutex;
     mutable std::condition_variable m_cv_finished;
     std::vector<audio*> m_audios;
+    std::mutex m_audios_mutex;
     std::vector<float32> m_frames_buffer;
     float m_volume{ 1.0f };
-    bool m_stop_later{ false };
-    bool m_silence{ true };
+    std::atomic<bool> m_silence{ true };
 };
 
 oastream& operator<<(oastream& aout, audio& a)
