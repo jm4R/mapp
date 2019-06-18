@@ -7,8 +7,8 @@
 #define MA_NO_PULSEAUDIO
 #include "miniaudio/miniaudio.h"
 
-#include <atomic> //atomic
 #include <algorithm> //remove_if
+#include <atomic> //atomic
 #include <condition_variable> //condition_variable
 #include <cstring> //memset
 #include <exception> //exception
@@ -153,6 +153,11 @@ protected:
     {
     }
 
+    ~audio()
+    {
+        ma_decoder_uninit(&m_decoder);
+    }
+
 private:
     void rewind()
     {
@@ -230,8 +235,7 @@ struct oastream_config {
 };
 
 //what to do when atempt to play audio that is currently played
-enum class replay_strategy
-{
+enum class replay_strategy {
     rewind,
     skip
 };
@@ -272,7 +276,7 @@ public:
     /// Removes all audios without stopping stream. Audios finish callbacks will not be invoked.
     void stop_audios()
     {
-        std::lock_guard l{m_audios_mutex};
+        std::lock_guard<std::mutex> l{ m_audios_mutex };
         m_audios.clear();
     }
 
@@ -286,10 +290,8 @@ public:
     /// Starts when the stream is stopped.
     void play(audio& audio, replay_strategy strategy = replay_strategy::rewind)
     {
-        if (!audio.m_silence)
-        {
-            switch (strategy)
-            {
+        if (!audio.m_silence) {
+            switch (strategy) {
             case replay_strategy::rewind:
                 audio.stop();
                 audio.wait();
@@ -298,9 +300,10 @@ public:
                 return;
             }
         }
-        audio.rewind();
         {
-            std::lock_guard l{m_audios_mutex};
+            std::lock_guard<std::mutex> l{ m_audios_mutex };
+            audio.rewind();
+            audio.m_silence = false;
             m_audios.push_back(&audio);
         }
         play_impl();
@@ -339,11 +342,9 @@ private:
 
         // under lock:
         bool silence = [&] {
-            std::lock_guard l{m_audios_mutex};
-            for (auto* audio : m_audios)
-            {
-                const auto framesDecoded =
-                    audio->data(audio_output, frameCount);
+            std::lock_guard<std::mutex> l{ m_audios_mutex };
+            for (auto* audio : m_audios) {
+                const auto framesDecoded = audio->data(audio_output, frameCount);
                 for (unsigned i = 0;
                      i < framesDecoded * m_dev_config.playback.channels; ++i)
                     fOutput[i] += m_volume * audio_output[i];
