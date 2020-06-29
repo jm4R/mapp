@@ -6,7 +6,7 @@ Cloning and building
 ========
 This is headers only library that requires C++11. So just include `mapp.hpp` to your code. 
 
-Please als note that this repository is dependent on miniaudio git submodule, so clone recursive, e.g.:
+Please also note that this repository is dependent on miniaudio git submodule, so clone recursive, e.g.:
 
     git clone --recursive https://github.com/jm4R/mapp.git
 
