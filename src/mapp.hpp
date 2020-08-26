@@ -27,11 +27,11 @@
 #pragma once
 
 #define DR_WAV_IMPLEMENTATION
-#include "miniaudio/extras/dr_wav.h"
+#include <miniaudio/extras/dr_wav.h>
 
 #define MINIAUDIO_IMPLEMENTATION
 #define MA_NO_PULSEAUDIO
-#include "miniaudio/miniaudio.h"
+#include <miniaudio/miniaudio.h>
 
 #include <algorithm> //remove_if
 #include <condition_variable> //condition_variable
@@ -44,7 +44,7 @@
 
 namespace mapp {
 
-class mapp_exception final : std::exception {
+class mapp_exception final : public std::exception {
 public:
     enum reason {
         error = -1,
@@ -53,7 +53,7 @@ public:
         out_of_memory = -4,
         access_denied = -5,
         too_large = -6,
-        timeout = -7,
+        not_exist_or_timeout = -7,
 
         format_not_supported = -100,
         device_type_not_supported = -101,
@@ -84,12 +84,12 @@ public:
         failed_to_create_event = -312
     } the_reason;
 
-    mapp_exception(reason r = error)
+  explicit mapp_exception(reason r = error)
         : the_reason{ r }
     {
     }
 
-    mapp_exception(ma_result ma_error_code)
+  explicit mapp_exception(ma_result ma_error_code)
         : the_reason{ static_cast<reason>(ma_error_code) }
     {
     }
@@ -108,7 +108,7 @@ public:
             stringify(out_of_memory);
             stringify(access_denied);
             stringify(too_large);
-            stringify(timeout);
+            stringify(not_exist_or_timeout);
 
             stringify(format_not_supported);
             stringify(device_type_not_supported);
@@ -225,7 +225,7 @@ private:
 class audio_file final : public audio {
 
 public:
-    audio_file(const char* file_name)
+  explicit audio_file(const char* file_name)
     {
         ma_decoder_config cfg = ma_decoder_config_init(ma_format_f32, 2, 44100); //TODO read from device
         const auto result = ma_decoder_init_file(file_name, &cfg, &m_decoder);
@@ -335,7 +335,7 @@ private:
     {
         std::size_t buffer_size_frames = frameCount * m_dev_config.playback.channels;
 
-        m_frames_buffer.reserve(buffer_size_frames);
+        m_frames_buffer.resize(buffer_size_frames);
         float32* audio_output = m_frames_buffer.data();
         auto fOutput = static_cast<float32*>(pOutput);
         std::memset(fOutput, 0, buffer_size_frames * sizeof(float32));
@@ -374,7 +374,7 @@ private:
         cfg.sampleRate = oa_cfg.sample_rate;
         cfg.dataCallback = data_callback;
         cfg.pUserData = this;
-        cfg.bufferSizeInMilliseconds = oa_cfg.buffer_size_ms;
+        cfg.periodSizeInMilliseconds = oa_cfg.buffer_size_ms;
         return cfg;
     }
 
